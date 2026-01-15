@@ -8,7 +8,7 @@ import cv2
 import re
 
 # --- CONFIG MinIO ---
-MINIO_ENDPOINT = "http://192.168.2.41:9000"
+MINIO_ENDPOINT = "http://192.168.2.21:9000"
 MINIO_BUCKET = "camera-frames"
 MINIO_PREFIX = ""
 MINIO_VIDEO_PREFIX = "videos/"

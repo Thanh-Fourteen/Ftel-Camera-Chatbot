@@ -131,33 +131,66 @@ class ElasticsearchSearcher:
     def _json_string_query(self, field: str, value: Any) -> List[Dict[str, Any]]:
         clauses = []
 
+        # number
         if isinstance(value, (int, float)):
-            clauses.append({
+            return [{
                 "match_phrase": {field: f": {value}"}
-            })
-            return clauses
+            }]
 
+        # string
         if isinstance(value, str):
-            clauses.append({
+            return [{
                 "match_phrase": {field: f'"{value}"'}
-            })
-            return clauses
+            }]
 
+        # dict
         if isinstance(value, dict):
             for k, v in value.items():
-                formatted_v = self._format_json_value(v)
-                clauses.append({
-                    "match_phrase": {
-                        field: f'"{k}": {formatted_v}'
-                    }
-                })
+
+                # OR condition
+                if isinstance(v, list):
+                    should_clauses = []
+                    for item in v:
+                        formatted_v = self._format_json_value(item)
+                        should_clauses.append({
+                            "match_phrase": {
+                                field: f'"{k}": {formatted_v}'
+                            }
+                        })
+
+                    clauses.append({
+                        "bool": {
+                            "should": should_clauses,
+                            "minimum_should_match": 1
+                        }
+                    })
+
+                # AND condition
+                else:
+                    formatted_v = self._format_json_value(v)
+                    clauses.append({
+                        "match_phrase": {
+                            field: f'"{k}": {formatted_v}'
+                        }
+                    })
+
             return clauses
 
+        # list at top-level
         if isinstance(value, list):
+            should = []
             for item in value:
-                clauses.extend(self._json_string_query(field, item))
+                should.extend(self._json_string_query(field, item))
+
+            return [{
+                "bool": {
+                    "should": should,
+                    "minimum_should_match": 1
+                }
+            }]
 
         return clauses
+
 
     def _format_json_value(self, value: Any) -> str:
         """
@@ -474,44 +507,52 @@ class ElasticsearchSearcher:
         time_field: str = "frame_ts",
         source_fields: Optional[List[str]] = ["camera_id", "frame_id", "frame_ts"],
         threshold: int = 100,
-        max_docs: int = 100_000
+        size: int = 2000
     ) -> List[Dict[str, Any]]:
         """
         Find longest consecutive sequence based on time difference.
         :param query_dict: Filters
         :param source_fields: Fields to return (default: [camera_id, frame_id, frame_ts])
         :param threshold: Max diff to be considered continuous
-        :param max_docs: Hard limit to protect memory
         """
 
         es_query = self.build_query_from_dict(query_dict)
 
+        scan_iter = scan(
+            self.es,
+            index=self.index_name,
+            query={
+                "_source": source_fields,
+                "query": es_query["query"],
+                "sort": [{time_field: "asc"}]
+            },
+            size=size
+        )
+
+        self.find_longest_sequence_from_docs(scan_iter, time_field, threshold)
+
+    def find_longest_sequence_from_docs(
+        self,
+        docs: List[Dict[str, Any]],
+        time_field: str = "frame_ts",
+        threshold: int = 100
+    ) -> List[Dict[str, Any]]:
+
         try:
-            scan_iter = scan(
-                self.es,
-                index=self.index_name,
-                query={
-                    "_source": source_fields,
-                    "query": es_query["query"],
-                    "sort": [{time_field: "asc"}]
-                },
-                size=2000
-            )
+            if not docs:
+                return []
+
+            docs = sorted(docs, key=lambda x: x.get(time_field, 0))
 
             max_seq: List[Dict[str, Any]] = []
             cur_seq: List[Dict[str, Any]] = []
 
             prev_time: Optional[int] = None
 
-            for i, hit in enumerate(scan_iter):
-                if i >= max_docs:
-                    break
-
-                src = hit["_source"]
+            for src in docs:
                 t = src.get(time_field)
-
                 if t is None:
-                    continue  # safety
+                    continue
 
                 if prev_time is None or t - prev_time <= threshold:
                     cur_seq.append(src)
@@ -526,9 +567,86 @@ class ElasticsearchSearcher:
                 max_seq = cur_seq.copy()
 
             return max_seq
-
         except elastic_transport.TransportError as e:
             raise RuntimeError(f"Sequence search error: {str(e)}") from e
+    
+    def split_into_sequences(
+        self,
+        query_dict: Dict[str, Any],
+        time_field: str = "frame_ts",
+        source_fields: Optional[List[str]] = ["camera_id", "frame_id", "frame_ts"],
+        threshold: int = 100,
+        size: int = 2000,
+        min_length: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Find longest consecutive sequence based on time difference.
+        :param query_dict: Filters
+        :param source_fields: Fields to return (default: [camera_id, frame_id, frame_ts])
+        :param threshold: Max diff to be considered continuous
+        """
+
+        es_query = self.build_query_from_dict(query_dict)
+
+        scan_iter = scan(
+            self.es,
+            index=self.index_name,
+            query={
+                "_source": source_fields,
+                "query": es_query["query"],
+                "sort": [{time_field: "asc"}]
+            },
+            size=size
+        )
+
+        self.split_into_sequences_from_docs(scan_iter, time_field, threshold, min_length)
+    
+    def split_into_sequences_from_docs(
+        self,
+        docs: List[Dict[str, Any]],
+        time_field: str = "frame_ts",
+        threshold: int = 100,
+        min_length: int = 1
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        Split documents into multiple consecutive sequences.
+
+        :param docs: List of ES _source docs
+        :param time_field: Time field name
+        :param threshold: Max time diff to be continuous
+        :param min_length: Minimum sequence length to keep
+        :return: List of sequences
+        """
+
+        if not docs:
+            return []
+
+        docs = sorted(docs, key=lambda x: x.get(time_field, 0))
+
+        sequences: List[List[Dict[str, Any]]] = []
+        cur_seq: List[Dict[str, Any]] = []
+
+        prev_time: Optional[int] = None
+
+        for src in docs:
+            t = src.get(time_field)
+            if t is None:
+                continue
+
+            if prev_time is None or t - prev_time <= threshold:
+                cur_seq.append(src)
+            else:
+                if len(cur_seq) >= min_length:
+                    sequences.append(cur_seq)
+                cur_seq = [src]
+
+            prev_time = t
+
+        # append last sequence
+        if len(cur_seq) >= min_length:
+            sequences.append(cur_seq)
+
+        return sequences
 
     def aggregate_by_time(self, query_dict, time_field="frame_ts", interval=1000):
         es_query = self.build_query_from_dict(query_dict)

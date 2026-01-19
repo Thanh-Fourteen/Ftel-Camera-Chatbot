@@ -6,7 +6,7 @@ if __name__ == "__main__":
 
     sample_input = {
         "camera_id": "video.raw.hcm_thanh",
-        "tracks": { "track_id": 3 }
+        "tracks": 3
     }
 
     # Basic search
@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     # Longest sequence
     seq = searcher.find_longest_sequence(
-        {"tracks": {"track_id": 3}},
+        {"tracks": 3},
         source_fields=["frame_id", "frame_ts", "image_path"]
     )
     # seq = searcher.find_longest_sequence(

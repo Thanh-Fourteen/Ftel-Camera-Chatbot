@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  chatbot-api:
+    container_name: chatbot-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2546:8686"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  minio_data:

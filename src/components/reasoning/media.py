@@ -138,16 +138,12 @@ class MediaProcessor:
     def __init__(
         self,
         minio_endpoint: str = "http://192.168.2.21:9000",
-        image_bucket: str = "camera-frames",
-        video_bucket: str = "camera-videos",
         access_key: str = "minioadmin",
         secret_key: str = "minioadmin",
         fps: int = 25,
         presigned_expiry_days: int = 7,
         tmp_root: str = "/tmp",
     ):
-        self.image_bucket = image_bucket
-        self.video_bucket = video_bucket
         self.fps = fps
         self.tmp_root = tmp_root
         self.presigned_expiry = timedelta(days=presigned_expiry_days)
@@ -160,9 +156,6 @@ class MediaProcessor:
             config=Config(signature_version="s3v4"),
         )
 
-        self._ensure_bucket_exists(self.image_bucket)
-        self._ensure_bucket_exists(self.video_bucket)
-
     # ---------------- PRIVATE ----------------
     def _ensure_bucket_exists(self, bucket_name: str):
         try:
@@ -173,12 +166,13 @@ class MediaProcessor:
 
     def _download_frame(self, image_key: str, tmp_dir: str) -> str | None:
         image_key = unquote(image_key)
+        collection, image_path = image_key.split("/", 1)
         local_path = os.path.join(tmp_dir, f"{uuid.uuid4()}.jpg")
 
         try:
             self.s3.download_file(
-                self.image_bucket,
-                image_key,
+                collection,
+                image_path,
                 local_path,
             )
             return local_path
@@ -212,12 +206,14 @@ class MediaProcessor:
 
     def _upload_video(self, video_path: str, base_path: str) -> Dict[str, str] | None:
         video_id = str(uuid.uuid4())
+        collection, base_path = base_path.split("/", 1)
+        base_path = base_path.replace("/images/", "/videos/")
         key = f"{base_path}{video_id}.mp4"
 
         try:
             self.s3.upload_file(
                 video_path,
-                self.video_bucket,
+                collection,
                 key,
                 ExtraArgs={"ContentType": "video/mp4"},
             )
@@ -233,7 +229,6 @@ class MediaProcessor:
         self,
         sequences: List[List[Dict[str, Any]]],
         image_field: str = "image_path",
-        strip_prefix: str = "/data/frames/",
     ) -> List[Dict[str, Any]]:
         results = []
 
@@ -252,8 +247,11 @@ class MediaProcessor:
                 raw_path = d.get(image_field)
                 if not raw_path:
                     continue
-
-                key = raw_path.replace(strip_prefix, "", 1)
+                
+                # xử lý temp
+                parts = raw_path.strip("/").split("/")
+                key = os.path.join("floor-01", parts[2], "20262001", "images", parts[-1])
+                
                 image_keys.append(key)
 
                 local = self._download_frame(key, tmp_dir)

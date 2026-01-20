@@ -1,3 +1,4 @@
+import time
 from src.components.retrieval.es_search import ElasticsearchSearcher
 from src.components.reasoning.media import MediaProcessor
 
@@ -6,15 +7,18 @@ if __name__ == "__main__":
 
     query = {
         "actions": {
-            # "track_id": 3,
+            "track_id": 3,
             "label": ["Fall Down", "Lying Down"]
         }
     }
 
+    start_search = time.perf_counter()
     docs = searcher.search_by_dict(
         query,
         size=10000,
     )
+    end_search = time.perf_counter()
+    print("Time search local: ", end_search - start_search)
 
     sequences = searcher.split_into_sequences_from_docs(
         docs,
@@ -29,14 +33,15 @@ if __name__ == "__main__":
 
     media = MediaProcessor(
         minio_endpoint="http://192.168.2.21:9000",
-        image_bucket="camera-frames",
-        video_bucket="camera-videos",
         access_key="minioadmin",
         secret_key="minioadmin",
         fps=25,
     )
 
+    start_media = time.perf_counter()
     results = media.build_videos_from_sequences(sequences)
+    end_media = time.perf_counter()
+    print("Time media local: ", end_media - start_media)
 
     for r in results:
         print(r)

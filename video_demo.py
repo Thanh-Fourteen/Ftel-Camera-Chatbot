@@ -8,7 +8,7 @@ if __name__ == "__main__":
     query = {
         "actions": {
             "track_id": 3,
-            "label": ["Fall Down", "Lying Down"]
+            # "label": ["Fall Down", "Lying Down"]
         }
     }
 
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     )
 
     start_media = time.perf_counter()
-    results = media.build_videos_from_sequences(sequences)
+    results = media.build_videos_from_sequences(sequences, show_visualize=True)
     end_media = time.perf_counter()
     print("Time media local: ", end_media - start_media)
 
